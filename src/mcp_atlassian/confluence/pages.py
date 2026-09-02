@@ -822,6 +822,50 @@ class PagesMixin(ConfluenceClient):
             logger.debug("Full exception details:", exc_info=True)
             return []
 
+    def _get_space_folders(
+        self, space_key: str, limit: int, expand: str
+    ) -> list[dict[str, Any]]:
+        """Fetch a space's folders via a raw CQL content query.
+
+        get_all_pages_from_space_raw() only supports type=page/blogpost.
+        Folders are a Cloud-only content type with no dedicated bulk-fetch
+        method in atlassian-python-api, so this hits /rest/api/content
+        directly with a cql filter — mirrors how the library itself
+        implements get_all_draft_pages_from_space_through_cql().
+
+        Best-effort: returns [] (logged at debug) if the instance doesn't
+        support folders at all, e.g. Server/Data Center.
+        """
+        page_size = 200
+        start = 0
+        folders: list[dict[str, Any]] = []
+        cql_space = space_key.replace('"', '\\"')
+
+        try:
+            while len(folders) < limit:
+                fetch_limit = min(page_size, limit - len(folders))
+                response = self.confluence.get(
+                    "rest/api/content",
+                    params={
+                        "cql": f'space="{cql_space}" and type=folder',
+                        "start": start,
+                        "limit": fetch_limit,
+                        "expand": expand,
+                    },
+                )
+                batch = response.get("results", [])
+                folders.extend(batch)
+
+                next_link = response.get("_links", {}).get("next")
+                if not batch or not next_link:
+                    break
+                start += len(batch)
+        except Exception as e:
+            logger.debug(f"Could not fetch folders for space '{space_key}': {e}")
+            return []
+
+        return folders
+
     @handle_auth_errors("Confluence API")
     def get_space_page_tree(
         self,
@@ -830,9 +874,10 @@ class PagesMixin(ConfluenceClient):
     ) -> dict:
         """Get hierarchical page tree for a space.
 
-        Returns a flat list of pages with parent_id and position attributes,
-        allowing the AI to build custom views or filter as needed. This is
-        more token-efficient than ASCII art and easier to process.
+        Returns a flat list of pages (and, where supported, folders) with
+        parent_id and position attributes, allowing the AI to build custom
+        views or filter as needed. This is more token-efficient than ASCII
+        art and easier to process.
 
         Uses manual pagination via get_all_pages_from_space_raw() to reliably
         fetch all pages and detect truncation via _links.next, matching the
@@ -845,10 +890,14 @@ class PagesMixin(ConfluenceClient):
         Returns:
             Dictionary with:
             - space_key: The space key
-            - total_pages: Total number of pages in the response
+            - total_pages: Total number of nodes in the response (pages + folders)
             - has_more: Whether more pages exist beyond the limit
-            - pages: List of dicts with id, title, parent_id, position, depth
-            - Note: parent_id is None for root pages
+            - pages: List of dicts with id, title, type, parent_id, position, depth
+            - Note: parent_id is None for root nodes. type is "page" or
+              "folder" — a folder can be a parent but has no content of its
+              own. Folders are only included on instances that support them
+              (Confluence Cloud); has_more/next_start do not account for
+              folder pagination, only pages.
 
         Raises:
             Exception: If there is an error fetching pages
@@ -879,6 +928,11 @@ class PagesMixin(ConfluenceClient):
                 start += len(batch)
 
             has_more = len(all_pages) >= limit and bool(next_link)
+
+            folders = self._get_space_folders(
+                space_key, limit, expand="ancestors,extensions.position"
+            )
+            all_pages.extend(folders)
 
             if not all_pages:
                 return {
@@ -911,6 +965,7 @@ class PagesMixin(ConfluenceClient):
                     {
                         "id": page_id,
                         "title": title,
+                        "type": page.get("type", "page"),
                         "parent_id": parent_id,
                         "position": position,
                         "depth": depth,

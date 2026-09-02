@@ -176,6 +176,7 @@ def mock_atlassian_confluence(
         confluence_instance.get_page_comments.return_value = MOCK_COMMENTS_RESPONSE
         confluence_instance.get_page_labels.return_value = MOCK_LABELS_RESPONSE
         confluence_instance.cql.return_value = MOCK_CQL_SEARCH_RESPONSE
+        confluence_instance.get.return_value = {"results": []}
 
         # Enhanced responses using factories
         confluence_instance.create_page.return_value = ConfluencePageFactory.create(

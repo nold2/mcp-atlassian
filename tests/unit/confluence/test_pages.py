@@ -2944,3 +2944,100 @@ class TestPageHierarchy:
 
         assert result["total_pages"] == 1
         assert result["has_more"] is False
+
+    def test_get_space_page_tree_merges_folders(self, pages_mixin):
+        """Folders returned by the CQL fetch are merged in with type='folder'."""
+        mock_page = {
+            "id": "123",
+            "title": "Root Page",
+            "type": "page",
+            "ancestors": [],
+            "extensions": {"position": 0},
+        }
+        mock_folder = {
+            "id": "456",
+            "title": "Runbooks",
+            "type": "folder",
+            "ancestors": [],
+            "extensions": {"position": 1},
+        }
+        pages_mixin.confluence.get_all_pages_from_space_raw = MagicMock(
+            return_value=self._raw_response([mock_page])
+        )
+        pages_mixin.confluence.get = MagicMock(return_value={"results": [mock_folder]})
+
+        result = pages_mixin.get_space_page_tree("TEST")
+
+        assert result["total_pages"] == 2
+        folder = next(p for p in result["pages"] if p["id"] == "456")
+        page = next(p for p in result["pages"] if p["id"] == "123")
+        assert folder["type"] == "folder"
+        assert page["type"] == "page"
+
+    def test_get_space_page_tree_resolves_folder_parent(self, pages_mixin):
+        """A page whose parent is a folder gets a parent_id present in the output.
+
+        Regression: previously folders were never fetched, so a page nested
+        under a folder had a parent_id pointing at a node absent from the
+        result — effectively a dangling reference.
+        """
+        mock_folder = {
+            "id": "folder-1",
+            "title": "Runbooks",
+            "type": "folder",
+            "ancestors": [],
+            "extensions": {"position": 0},
+        }
+        mock_page = {
+            "id": "page-1",
+            "title": "Deploy Guide",
+            "type": "page",
+            "ancestors": [{"id": "folder-1"}],
+            "extensions": {"position": 0},
+        }
+        pages_mixin.confluence.get_all_pages_from_space_raw = MagicMock(
+            return_value=self._raw_response([mock_page])
+        )
+        pages_mixin.confluence.get = MagicMock(return_value={"results": [mock_folder]})
+
+        result = pages_mixin.get_space_page_tree("TEST")
+
+        ids = {p["id"] for p in result["pages"]}
+        page = next(p for p in result["pages"] if p["id"] == "page-1")
+        assert page["parent_id"] == "folder-1"
+        assert page["parent_id"] in ids  # no longer a dangling reference
+
+    def test_get_space_page_tree_folder_fetch_failure_is_non_fatal(self, pages_mixin):
+        """If the folder CQL fetch fails (e.g. Server/DC has no folders),
+        pages are still returned normally."""
+        mock_page = {
+            "id": "123",
+            "title": "Root Page",
+            "type": "page",
+            "ancestors": [],
+            "extensions": {"position": 0},
+        }
+        pages_mixin.confluence.get_all_pages_from_space_raw = MagicMock(
+            return_value=self._raw_response([mock_page])
+        )
+        pages_mixin.confluence.get = MagicMock(side_effect=Exception("400 Bad Request"))
+
+        result = pages_mixin.get_space_page_tree("TEST")
+
+        assert result["total_pages"] == 1
+        assert result["pages"][0]["id"] == "123"
+
+    def test_get_space_page_tree_folder_query_uses_cql(self, pages_mixin):
+        """Folder fetch hits /rest/api/content with a cql filter on the space."""
+        pages_mixin.confluence.get_all_pages_from_space_raw = MagicMock(
+            return_value=self._raw_response([])
+        )
+        mock_get = MagicMock(return_value={"results": []})
+        pages_mixin.confluence.get = mock_get
+
+        pages_mixin.get_space_page_tree("TEST")
+
+        args, kwargs = mock_get.call_args
+        assert args[0] == "rest/api/content"
+        assert 'space="TEST"' in kwargs["params"]["cql"]
+        assert "type=folder" in kwargs["params"]["cql"]
