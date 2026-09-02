@@ -97,6 +97,17 @@ Documentation is also available in [llms.txt format](https://llmstxt.org/), whic
 
 **72 tools total** — See [Tools Reference](https://mcp-atlassian.soomiles.com/docs/tools-reference) for the complete list.
 
+## Local Development (Claude Code)
+
+If you're iterating on this repo and testing it via `register-mcp.sh` (registers `mcp-atlassian` as a `claude mcp add` user-scoped server reading `.env`), the connection is a long-lived subprocess — it does **not** pick up code changes automatically. After every fix/change:
+
+```bash
+claude mcp remove mcp-atlassian -s user
+./register-mcp.sh
+```
+
+Then restart Claude Code (or reconnect the server) so it respawns from the current source.
+
 ## Security
 
 Never share API tokens. Keep `.env` files secure. See [SECURITY.md](SECURITY.md).
