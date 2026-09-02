@@ -3041,3 +3041,64 @@ class TestPageHierarchy:
         assert args[0] == "rest/api/content"
         assert 'space="TEST"' in kwargs["params"]["cql"]
         assert "type=folder" in kwargs["params"]["cql"]
+
+    def test_get_space_page_tree_handles_mixed_position_types(self, pages_mixin):
+        """Regression: pages and folders come from different endpoints and
+        their extensions.position types aren't guaranteed to match (e.g. int
+        vs str) — sorting must not crash comparing across the two.
+        """
+        mock_page = {
+            "id": "123",
+            "title": "Page",
+            "type": "page",
+            "ancestors": [],
+            "extensions": {"position": 0},
+        }
+        mock_folder = {
+            "id": "456",
+            "title": "Folder",
+            "type": "folder",
+            "ancestors": [],
+            "extensions": {"position": "1"},
+        }
+        pages_mixin.confluence.get_all_pages_from_space_raw = MagicMock(
+            return_value=self._raw_response([mock_page])
+        )
+        pages_mixin.confluence.get = MagicMock(return_value={"results": [mock_folder]})
+
+        result = pages_mixin.get_space_page_tree("TEST")
+
+        assert result["total_pages"] == 2
+        folder = next(p for p in result["pages"] if p["id"] == "456")
+        assert folder["position"] == 1
+
+    def test_get_space_page_tree_normalizes_id_types(self, pages_mixin):
+        """Regression: id/parent_id types must be normalized so a folder's
+        int-typed id (or vice versa) still matches a child page's
+        ancestor id when linking parent_id.
+        """
+        mock_folder = {
+            "id": 456,
+            "title": "Folder",
+            "type": "folder",
+            "ancestors": [],
+            "extensions": {"position": 0},
+        }
+        mock_page = {
+            "id": "123",
+            "title": "Page",
+            "type": "page",
+            "ancestors": [{"id": 456}],
+            "extensions": {"position": 0},
+        }
+        pages_mixin.confluence.get_all_pages_from_space_raw = MagicMock(
+            return_value=self._raw_response([mock_page])
+        )
+        pages_mixin.confluence.get = MagicMock(return_value={"results": [mock_folder]})
+
+        result = pages_mixin.get_space_page_tree("TEST")
+
+        ids = {p["id"] for p in result["pages"]}
+        page = next(p for p in result["pages"] if p["id"] == "123")
+        assert page["parent_id"] == "456"
+        assert page["parent_id"] in ids

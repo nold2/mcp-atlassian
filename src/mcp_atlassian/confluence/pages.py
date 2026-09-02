@@ -946,16 +946,27 @@ class PagesMixin(ConfluenceClient):
             result_pages = []
 
             for page in all_pages:
-                page_id = page.get("id")
+                # Pages and folders come from two different endpoints
+                # (typed content fetch vs CQL content fetch); id/position
+                # types aren't guaranteed to match between them, so
+                # normalize both rather than risk a str/int sort crash.
+                raw_id = page.get("id")
+                page_id = str(raw_id) if raw_id is not None else None
                 title = page.get("title", "Untitled")
 
-                # Position is auto-included via extensions in the v1 API
-                position = page.get("extensions", {}).get("position")
+                raw_position = page.get("extensions", {}).get("position")
+                try:
+                    position = int(raw_position) if raw_position is not None else None
+                except (TypeError, ValueError):
+                    position = None
 
                 # Determine parent and depth from ancestors
                 ancestors = page.get("ancestors", [])
                 if ancestors:
-                    parent_id = ancestors[-1].get("id")
+                    raw_parent_id = ancestors[-1].get("id")
+                    parent_id = (
+                        str(raw_parent_id) if raw_parent_id is not None else None
+                    )
                     depth = len(ancestors)
                 else:
                     parent_id = None
